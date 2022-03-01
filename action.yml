@@ -1,0 +1,52 @@
+name: "Test coverage badge"
+description: "Creates a coverage badge."
+author: "pooi (Taewoo You)"
+
+inputs:
+  token:
+    description: 'Token to use for git clone commend'
+    required: true
+  xml-test-report-path:
+    description: 'The test reporter path (xml)'
+    required: true
+  html-test-report-path:
+    description: 'The test reporter path (html)'
+    required: true
+  github-page-ref:
+    description: "Github page branch name"
+    required: false
+    default: gh-pages
+  github-page-path:
+    description: "Github page branch name"
+    required: false
+    default: gh-pages
+
+runs:
+  using: composite
+  steps:
+    - name: checkout github page
+      shell: bash
+      run: |
+        git clone "$($GITHUB_ACTION_PATH/clone-url.py ${{ inputs.token }} ${{ github.repositoryUrl }})" ${{ inputs.github-page-path }}
+        cd ${{ inputs.github-page-path }}
+        git checkout ${{ inputs.github-page-ref }}
+        ls
+    - name: Install dependency
+      run: pip3 install -r $GITHUB_ACTION_PATH/requirements.txt
+      shell: bash
+    - name: Build coverage badge
+      shell: bash
+      run: |
+        $GITHUB_ACTION_PATH/main.py ${{ inputs.xml-test-report-path }}
+        mv coverage.svg ${{ inputs.github-page-path }}/
+        rm -rf ${{ inputs.github-page-path }}/coverage
+        cp -a ${{ inputs.html-test-report-path }} ${{ inputs.github-page-path }}/coverage/
+    - name: Update coverage data
+      shell: bash
+      run: |
+        cd ${{ inputs.github-page-path }}
+        date > create.txt
+        ls
+        git add coverage.svg create.txt coverage
+        git commit -m "Update coverage data"
+        git push -q -f origin ${{ inputs.github-page-ref }}
