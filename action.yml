@@ -47,6 +47,8 @@ runs:
         cd ${{ inputs.github-page-path }}
         date > create.txt
         ls
+        git config user.name "$(git log -n 1 --pretty=format:%an)"
+        git config user.email "$(git log -n 1 --pretty=format:%ae)"
         git add coverage.svg create.txt coverage
         git commit -m "Update coverage data"
         git push -q -f origin ${{ inputs.github-page-ref }}
