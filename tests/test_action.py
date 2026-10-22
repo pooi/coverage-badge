@@ -111,16 +111,18 @@ class ActionWiringTests(unittest.TestCase):
         coverage = next(step for step in job["steps"] if step.get("id") == "coverage")
         self.assertNotIn("token", coverage["with"])
 
-    def test_token_is_only_forwarded_to_deployment(self):
+    def test_token_is_limited_to_deployment_steps(self):
         self.assertFalse(ACTION["inputs"]["token"]["required"])
         self.assertEqual(ACTION["inputs"]["token"]["default"], "${{ github.token }}")
         steps = ACTION["runs"]["steps"]
         deployment = next(step for step in steps if step.get("id") == "deployment")
         self.assertEqual(deployment["with"]["token"], "${{ inputs.token }}")
+        branch = next(step for step in steps if step["name"] == "Publish coverage branch")
+        self.assertEqual(branch["env"]["COVERAGE_TOKEN"], "${{ inputs.token }}")
         for step in steps:
-            if step is not deployment:
+            if step not in (deployment, branch):
                 self.assertNotIn("inputs.token", str(step))
-        self.assertNotIn("github-page-ref", ACTION["inputs"])
+        self.assertEqual(ACTION["inputs"]["github-page-ref"]["default"], "gh-pages")
         self.assertNotIn("github-page-path", ACTION["inputs"])
         self.assertFalse((ROOT / "clone-url.py").exists())
 
@@ -134,10 +136,35 @@ class ActionWiringTests(unittest.TestCase):
         self.assertLess(steps.index(upload), steps.index(deployment))
         self.assertEqual(upload["with"]["path"], "${{ steps.site.outputs.path }}")
         self.assertEqual(ACTION["outputs"]["page-url"]["value"], "${{ steps.deployment.outputs.page_url }}")
+        self.assertEqual(upload["if"], "steps.mode.outputs.value == 'pages'")
+        self.assertEqual(deployment["if"], upload["if"])
+        branch = next(step for step in steps if step["name"] == "Publish coverage branch")
+        self.assertEqual(branch["if"], "steps.mode.outputs.value == 'branch'")
         for step in steps:
             self.assertNotIn("continue-on-error", step)
-            self.assertNotIn("if", step)
             self.assertNotIn("${{", step.get("run", ""))
+
+    def test_deployment_selection(self):
+        mode = next(step for step in ACTION["runs"]["steps"] if step.get("id") == "mode")
+        cases = (
+            ("auto", "https://github.com", "pages"),
+            ("auto", "https://github.example.test", "branch"),
+            ("branch", "https://github.com", "branch"),
+            ("pages", "https://github.example.test", None),
+            ("invalid", "https://github.com", None),
+        )
+        for requested, server, expected in cases:
+            with self.subTest(requested=requested, server=server), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "output"
+                environment = dict(os.environ, DEPLOYMENT_MODE=requested,
+                                   GITHUB_SERVER_URL=server, GITHUB_OUTPUT=str(output))
+                result = subprocess.run(["bash", "-c", mode["run"]], env=environment, capture_output=True)
+                if expected:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(output.read_text().strip(), f"value={expected}")
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":
