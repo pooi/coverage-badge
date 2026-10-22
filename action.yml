@@ -1,54 +1,62 @@
 name: "Test coverage badge"
-description: "Creates a coverage badge."
+description: "Creates a coverage badge and deploys coverage reports to GitHub Pages."
 author: "pooi (Taewoo You)"
 
 inputs:
   token:
-    description: 'Token to use for git clone commend'
-    required: true
+    description: 'GitHub token used for Pages deployment'
+    required: false
+    default: ${{ github.token }}
   xml-test-report-path:
     description: 'The test reporter path (xml)'
     required: true
   html-test-report-path:
     description: 'The test reporter path (html)'
     required: true
-  github-page-ref:
-    description: "Github page branch name"
-    required: false
-    default: gh-pages
-  github-page-path:
-    description: "Github page branch name"
-    required: false
-    default: gh-pages
+
+outputs:
+  page-url:
+    description: 'URL of the deployed GitHub Pages site'
+    value: ${{ steps.deployment.outputs.page_url }}
 
 runs:
   using: composite
   steps:
-    - name: checkout github page
-      shell: bash
-      run: |
-        git clone "$($GITHUB_ACTION_PATH/clone-url.py ${{ inputs.token }} ${{ github.repositoryUrl }})" ${{ inputs.github-page-path }}
-        cd ${{ inputs.github-page-path }}
-        git checkout ${{ inputs.github-page-ref }}
-        ls
     - name: Install dependency
-      run: pip3 install -r $GITHUB_ACTION_PATH/requirements.txt
+      run: python3 -m pip install -r "$GITHUB_ACTION_PATH/requirements.txt"
       shell: bash
-    - name: Build coverage badge
+    - name: Prepare coverage site
+      id: site
       shell: bash
+      env:
+        XML_TEST_REPORT_PATH: ${{ inputs.xml-test-report-path }}
+        HTML_TEST_REPORT_PATH: ${{ inputs.html-test-report-path }}
       run: |
-        $GITHUB_ACTION_PATH/main.py ${{ inputs.xml-test-report-path }}
-        mv coverage.svg ${{ inputs.github-page-path }}/
-        rm -rf ${{ inputs.github-page-path }}/coverage
-        cp -a ${{ inputs.html-test-report-path }} ${{ inputs.github-page-path }}/coverage/
-    - name: Update coverage data
-      shell: bash
-      run: |
-        cd ${{ inputs.github-page-path }}
-        date > create.txt
-        ls
-        git config user.name "$(git log -n 1 --pretty=format:%an)"
-        git config user.email "$(git log -n 1 --pretty=format:%ae)"
-        git add coverage.svg create.txt coverage
-        git commit -m "Update coverage data"
-        git push -q -f origin ${{ inputs.github-page-ref }}
+        set -euo pipefail
+        [[ -n "$XML_TEST_REPORT_PATH" ]] || { echo 'XML report path is required.' >&2; exit 1; }
+        [[ -n "$HTML_TEST_REPORT_PATH" ]] || { echo 'HTML report path is required.' >&2; exit 1; }
+        case "$XML_TEST_REPORT_PATH" in
+          /*) ;;
+          *) XML_TEST_REPORT_PATH="$GITHUB_WORKSPACE/$XML_TEST_REPORT_PATH" ;;
+        esac
+        case "$HTML_TEST_REPORT_PATH" in
+          /*) ;;
+          *) HTML_TEST_REPORT_PATH="$GITHUB_WORKSPACE/$HTML_TEST_REPORT_PATH" ;;
+        esac
+        [[ -f "$XML_TEST_REPORT_PATH" ]] || { echo 'XML report file does not exist.' >&2; exit 1; }
+        [[ -d "$HTML_TEST_REPORT_PATH" ]] || { echo 'HTML report directory does not exist.' >&2; exit 1; }
+        site_path="$(mktemp -d "$RUNNER_TEMP/coverage-pages.XXXXXX")"
+        cd "$site_path"
+        python3 "$GITHUB_ACTION_PATH/main.py" "$XML_TEST_REPORT_PATH"
+        [[ -s coverage.svg ]] || { echo 'XML report did not produce a coverage badge.' >&2; exit 1; }
+        cp -a -- "$HTML_TEST_REPORT_PATH" coverage
+        printf 'path=%s\n' "$site_path" >> "$GITHUB_OUTPUT"
+    - name: Upload coverage site
+      uses: actions/upload-pages-artifact@v4
+      with:
+        path: ${{ steps.site.outputs.path }}
+    - name: Deploy coverage site
+      id: deployment
+      uses: actions/deploy-pages@v4
+      with:
+        token: ${{ inputs.token }}

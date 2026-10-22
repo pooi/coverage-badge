@@ -1,1 +1,1 @@
-anybadge==1.8.0
+anybadge==1.16.0
